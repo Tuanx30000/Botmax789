@@ -3,17 +3,14 @@ import requests
 import random
 import logging
 import threading
-import asyncio
 from flask import Flask
-from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # ====================== CẤU HÌNH ======================
 TOKEN = "8667000858:AAHfBKtARPMZhaldyblv_ehP0l2xlkrY8o8"
 CHANNEL_ID = '-1002807452773'
 
-# CHỈ 1 ADMIN ID
-ADMIN_IDS = [8566247215]
+ADMIN_IDS = [8566247215]          # Chỉ 1 ID admin
 
 API_URL = "https://taixiumd5.maksh3979madfw.com/api/md5luckydice/GetSoiCau"
 
@@ -41,7 +38,7 @@ async def soi_cau(context: ContextTypes.DEFAULT_TYPE, so_lan: int = 1):
         data = response.json()
 
         if 'list' not in data or not data['list']:
-            return "❌ Không lấy được dữ liệu từ API."
+            return "❌ API không trả dữ liệu."
 
         messages = []
         for phien in data['list'][:so_lan]:
@@ -58,8 +55,7 @@ async def soi_cau(context: ContextTypes.DEFAULT_TYPE, so_lan: int = 1):
             last_digit = int(ma_md5[-1], 16) if ma_md5 else 0
 
             recent = data['list'][:10]
-            tai_count = sum(1 for p in recent 
-                            if p.get('resultTruyenThong') == 'TAI' or p.get('point', 0) >= 5)
+            tai_count = sum(1 for p in recent if p.get('resultTruyenThong') == 'TAI' or p.get('point', 0) >= 5)
             xiu_count = 10 - tai_count
             trend_bias = (tai_count - xiu_count) * 2
 
@@ -92,7 +88,7 @@ async def soi_cau(context: ContextTypes.DEFAULT_TYPE, so_lan: int = 1):
         return "❌ Lỗi kết nối API, thử lại sau."
 
 # ====================== COMMAND ======================
-async def soicau_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def soicau_command(update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ Chỉ admin mới dùng được lệnh này.")
         return
@@ -107,24 +103,18 @@ async def soicau_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(status)
 
 # ====================== KHỞI ĐỘNG ======================
-async def main():
-    # Xóa webhook cũ để tránh conflict 409
-    try:
-        temp_app = ApplicationBuilder().token(TOKEN).build()
-        await temp_app.bot.delete_webhook(drop_pending_updates=True)
-        logging.info("✅ Đã xóa webhook cũ thành công")
-    except Exception as e:
-        logging.warning(f"Không xóa được webhook: {e}")
-
-    # Chạy Flask keep-alive
+if __name__ == '__main__':
+    # Flask keep-alive (giúp Render không spin down quá nhanh)
     threading.Thread(target=run_web, daemon=True).start()
 
-    # Khởi tạo bot chính
     application = ApplicationBuilder().token(TOKEN).build()
     application.add_handler(CommandHandler("soicau", soicau_command))
 
-    logging.info("🚀 Bot MAX789 VIP TUANX3000 khởi động thành công!")
-    await application.run_polling(drop_pending_updates=True)
+    logging.info("🚀 Bot MAX789 VIP TUANX3000 đã khởi động!")
 
-if __name__ == '__main__':
-    asyncio.run(main())
+    # Chạy polling với tham số ổn định hơn
+    application.run_polling(
+        drop_pending_updates=True,
+        timeout=30,
+        allowed_updates=["message"]
+    )
