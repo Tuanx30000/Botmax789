@@ -4,13 +4,14 @@ import random
 import logging
 import threading
 from flask import Flask
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 # ====================== CẤU HÌNH ======================
 TOKEN = "8667000858:AAHfBKtARPMZhaldyblv_ehP0l2xlkrY8o8"
 CHANNEL_ID = '-1002807452773'
 
-ADMIN_IDS = [8566247215]          # Chỉ 1 ID admin
+ADMIN_IDS = [8566247215]
 
 API_URL = "https://taixiumd5.maksh3979madfw.com/api/md5luckydice/GetSoiCau"
 
@@ -87,14 +88,21 @@ async def soi_cau(context: ContextTypes.DEFAULT_TYPE, so_lan: int = 1):
         logging.error(f"Lỗi soi cầu: {e}")
         return "❌ Lỗi kết nối API, thử lại sau."
 
-# ====================== COMMAND ======================
-async def soicau_command(update, context: ContextTypes.DEFAULT_TYPE):
+# ====================== XỬ LÝ LỆNH "soicau" (KHÔNG CÓ DẤU /) ======================
+async def soicau_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
-        await update.message.reply_text("⛔ Chỉ admin mới dùng được lệnh này.")
+        return  # Không trả lời nếu không phải admin
+
+    text = update.message.text.strip().lower()
+
+    # Kiểm tra tin nhắn bắt đầu bằng "soicau"
+    if not text.startswith("soicau"):
         return
 
+    # Lấy số lần soi (mặc định là 1)
     try:
-        so_lan = int(context.args[0]) if context.args else 1
+        parts = text.split()
+        so_lan = int(parts[1]) if len(parts) > 1 else 1
         so_lan = max(1, min(10, so_lan))
     except:
         so_lan = 1
@@ -104,17 +112,12 @@ async def soicau_command(update, context: ContextTypes.DEFAULT_TYPE):
 
 # ====================== KHỞI ĐỘNG ======================
 if __name__ == '__main__':
-    # Flask keep-alive (giúp Render không spin down quá nhanh)
     threading.Thread(target=run_web, daemon=True).start()
 
     application = ApplicationBuilder().token(TOKEN).build()
-    application.add_handler(CommandHandler("soicau", soicau_command))
 
-    logging.info("🚀 Bot MAX789 VIP TUANX3000 đã khởi động!")
+    # Sử dụng MessageHandler để bắt lệnh không có dấu /
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, soicau_handler))
 
-    # Chạy polling với tham số ổn định hơn
-    application.run_polling(
-        drop_pending_updates=True,
-        timeout=30,
-        allowed_updates=["message"]
-    )
+    logging.info("🚀 Bot MAX789 VIP TUANX3000 đã khởi động - Lệnh: soicau (không dấu /)")
+    application.run_polling(drop_pending_updates=True, timeout=30)
