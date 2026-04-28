@@ -13,7 +13,7 @@ CHANNEL_ID = '-1003991810381'
 
 ADMIN_IDS = [8566247215]
 
-API_URL = "https://taixiumd5.maksh3979madfw.com/api/md5luckydice/GetSoiCau"
+API_URL = "https://taixiumd5.maksh3979madfw.com/api/md5luckydice/GetSoiCau?"
 
 logging.basicConfig(
     level=logging.INFO,
