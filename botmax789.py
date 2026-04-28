@@ -4,7 +4,8 @@ import random
 import logging
 import threading
 from flask import Flask
-from telegram.ext import ApplicationBuilder, CommandHandler
+
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # ====================== CẤU HÌNH ======================
 TOKEN = "8639357771:AAE5i6uDVgnAMd3vX5Y8-wYp8SaA-P2H59Y" 
@@ -16,7 +17,7 @@ API_URL = "https://taixiumd5.maksh3979madfw.com/api/md5luckydice/GetSoiCau"
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
 # ====================== WEB SERVER ======================
@@ -50,8 +51,8 @@ def parse_session_line(line: str):
     except Exception:
         return None
 
-# ====================== JOB MONITOR - ĐÃ SỬA ======================
-def job_monitor(context):
+# ====================== JOB MONITOR (ASYNC - ĐÃ SỬA) ======================
+async def job_monitor(context: ContextTypes.DEFAULT_TYPE):
     global last_session_id, bot_enabled
 
     if not bot_enabled:
@@ -65,43 +66,38 @@ def job_monitor(context):
         if not data or len(data) == 0:
             return
 
-        # Lấy phiên mới nhất
         latest_line = data[0]
         phien = parse_session_line(latest_line)
 
         if not phien or 'SessionId' not in phien:
-            logging.warning("Không parse được dữ liệu phiên")
+            logging.warning("Không parse được SessionId")
             return
 
-        current_session = int(phien['SessionId'])
+        current_session = int(phien.get('SessionId'))
 
-        # Tránh lặp lại phiên cũ
         if last_session_id is not None and last_session_id == current_session:
             return
 
         next_session = current_session + 1
 
-        # ====================== TÍNH TOÁN NỘI BỘ ======================
+        # ====================== TÍNH TOÁN ======================
         recent_10 = data[:10]
-
         tai_10 = 0
-        results = []   # Dùng để tính streak
+        results = []
 
-        for i, line in enumerate(recent_10):
+        for line in recent_10:
             p = parse_session_line(line)
             if not p:
                 continue
-                
             dice_sum = int(p.get('DiceSum', 0))
             is_tai = (p.get('resultTruyenThong') == 'TAI') or (dice_sum >= 11)
-            
             results.append('T' if is_tai else 'X')
             tai_10 += 1 if is_tai else 0
 
         xiu_10 = 10 - tai_10
         trend_bias = (tai_10 - xiu_10) * 2
 
-        # Tính cầu bệt (streak)
+        # Tính streak
         streak_tai = streak_xiu = 0
         for r in results:
             if r == 'T':
@@ -111,9 +107,8 @@ def job_monitor(context):
                 streak_xiu += 1
                 streak_tai = 0
 
-        # ====================== DỰ ĐOÁN NÂNG CAO ======================
+        # ====================== DỰ ĐOÁN ======================
         base = (next_session * 12) + (trend_bias * 4)
-
         if streak_tai >= 3:
             base += 25
         elif streak_xiu >= 3:
@@ -122,7 +117,6 @@ def job_monitor(context):
         diem = (base % 10 + random.randint(-1, 2)) % 10
         ket_qua = "🟢 TÀI" if diem >= 5 else "🔴 XỈU"
 
-        # Tính tỉ lệ
         ti_le = 76 + abs(trend_bias) * 1.2
         if (trend_bias > 6 and ket_qua == "🟢 TÀI") or (trend_bias < -6 and ket_qua == "🔴 XỈU"):
             ti_le += 5
@@ -131,7 +125,7 @@ def job_monitor(context):
 
         ti_le = max(72, min(89, int(ti_le)))
 
-        # ====================== SOẠN TIN NHẮN (ĐÃ ẨN TOÀN BỘ TREND) ======================
+        # ====================== TIN NHẮN (ẨN TREND) ======================
         msg = (
             f"🌟 **Max789 VIP TUANX3000** 🌟\n"
             f"🎯 Phiên: #{next_session}\n"
@@ -139,15 +133,14 @@ def job_monitor(context):
             f"📊 Tỉ lệ: **{ti_le}%**"
         )
 
-        # Gửi tin nhắn
-        context.bot.send_message(
+        await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text=msg,
             parse_mode='Markdown'
         )
 
         last_session_id = current_session
-        logging.info(f"Đã gửi dự đoán phiên #{next_session} → {ket_qua} | {ti_le}%")
+        logging.info(f"Phiên #{next_session} → {ket_qua} | {ti_le}%")
 
     except requests.exceptions.RequestException as e:
         logging.error(f"Lỗi kết nối API: {e}")
@@ -155,8 +148,8 @@ def job_monitor(context):
         logging.error(f"Lỗi job_monitor: {e}", exc_info=True)
 
 
-# ====================== COMMANDS ======================
-async def bat_tool(update, context):
+# ====================== COMMAND ======================
+async def bat_tool(update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
     global bot_enabled
@@ -164,7 +157,7 @@ async def bat_tool(update, context):
     await update.message.reply_text("✅ Bot đã được **BẬT**.")
 
 
-async def tat_tool(update, context):
+async def tat_tool(update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
     global bot_enabled
@@ -174,20 +167,16 @@ async def tat_tool(update, context):
 
 # ====================== KHỞI ĐỘNG ======================
 if __name__ == '__main__':
-    # Chạy Flask web server trong thread riêng
     threading.Thread(target=run_web, daemon=True).start()
 
-    # Khởi tạo Telegram Bot
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # Thêm Job chạy định kỳ
+    # Job chạy với async callback
     app.job_queue.run_repeating(job_monitor, interval=25, first=5)
 
-    # Thêm lệnh điều khiển
     app.add_handler(CommandHandler("batmax", bat_tool))
     app.add_handler(CommandHandler("tatmax", tat_tool))
 
-    logging.info("🚀 Bot Tài Xỉu MD5 - Phiên bản ẨN TREND đã khởi động thành công!")
+    logging.info("🚀 Bot Tài Xỉu MD5 - Phiên bản ẨN TREND (Async Fixed) đã khởi động!")
     
-    # Chạy bot
     app.run_polling(drop_pending_updates=True)
