@@ -152,7 +152,7 @@ async def job_monitor(context: ContextTypes.DEFAULT_TYPE):
 
         # ====================== GỬI TIN NHẮN ======================
         msg = (
-            f"🌟 **Max789 VIP TUANX3000** 🌟\n"
+            f"🌟 **Max789 MD5 TUANX3000** 🌟\n"
             f"🎯 Phiên: #{next_session}\n"
             f"🔮 Dự đoán: {ket_qua}\n"
             f"📊 Tỉ lệ: **{ti_le}%**"
