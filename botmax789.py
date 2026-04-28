@@ -4,120 +4,176 @@ import random
 import logging
 import threading
 from flask import Flask
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler
 
 # ====================== CẤU HÌNH ======================
-TOKEN = "8667000858:AAHfBKtARPMZhaldyblv_ehP0l2xlkrY8o8"
-CHANNEL_ID = '-1002807452773'
+TOKEN = "8639357771:AAE5i6uDVgnAMd3vX5Y8-wYp8SaA-P2H59Y" 
+CHANNEL_ID = '-1003991810381'
 
 ADMIN_IDS = [8566247215]
 
 API_URL = "https://taixiumd5.maksh3979madfw.com/api/md5luckydice/GetSoiCau"
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO)
 
-# ====================== FLASK KEEP-ALIVE ======================
+# ====================== WEB SERVER ======================
 app_flask = Flask(__name__)
 
 @app_flask.route('/')
 def home():
-    return "✅ Bot MAX789 VIP TUANX3000 đang chạy!"
+    return "Bot is running!"
 
 def run_web():
     port = int(os.environ.get('PORT', 10000))
     app_flask.run(host='0.0.0.0', port=port, debug=False)
 
-# ====================== HÀM SOI CẦU ======================
-async def soi_cau(context: ContextTypes.DEFAULT_TYPE, so_lan: int = 1):
+# ====================== BIẾN TOÀN CỤC ======================
+bot_enabled = True
+last_session_id = None
+
+# ====================== PARSE DỮ LIỆU ======================
+def parse_session_line(line: str):
     try:
-        response = requests.get(API_URL, timeout=15)
+        line = line.strip().strip('[]')
+        items = line.split(',')
+        data = {}
+        for item in items:
+            if ':' in item:
+                key, value = item.split(':', 1)
+                key = key.strip()
+                value = value.strip().strip('"')
+                data[key] = value
+        return data
+    except:
+        return None
+
+# ====================== JOB MONITOR - TÍNH TOÁN NÂNG CAO ======================
+async def job_monitor(context):
+    global last_session_id, bot_enabled
+
+    if not bot_enabled:
+        return
+
+    try:
+        response = requests.get(API_URL, timeout=12)
         response.raise_for_status()
         data = response.json()
 
-        if 'list' not in data or not data['list']:
-            return "❌ API không trả dữ liệu."
+        if not data or len(data) == 0:
+            return
 
-        messages = []
-        for phien in data['list'][:so_lan]:
-            id_moi = int(phien.get('id', 0)) + 1
-            ma_md5 = str(phien.get('_id', '0' * 32)).lower()
+        latest_line = data[0]
+        phien = parse_session_line(latest_line)
 
-            last4 = ma_md5[-4:].zfill(4)
-            last8 = ma_md5[-8:].zfill(8)
-            last12 = ma_md5[-12:].zfill(12)
+        if not phien or 'SessionId' not in phien:
+            return
 
-            val4 = int(last4, 16) % 100
-            val8 = int(last8, 16) % 100
-            sum_hex = sum(int(c, 16) for c in last12)
-            last_digit = int(ma_md5[-1], 16) if ma_md5 else 0
+        current_session = int(phien['SessionId'])
 
-            recent = data['list'][:10]
-            tai_count = sum(1 for p in recent if p.get('resultTruyenThong') == 'TAI' or p.get('point', 0) >= 5)
-            xiu_count = 10 - tai_count
-            trend_bias = (tai_count - xiu_count) * 2
+        if last_session_id == current_session:
+            return
 
-            base = (id_moi * 15 + val4 * 8 + val8 * 5 + last_digit * 10 + sum_hex * 3 + trend_bias)
-            diem = (base % 10 + random.randint(0, 1)) % 10
+        next_session = current_session + 1
 
-            ket_qua = "🟢 TÀI" if diem >= 5 else "🔴 XỈU"
+        # ====================== PHÂN TÍCH CẦU NÂNG CAO ======================
+        recent_10 = data[:10]
+        recent_5 = data[:5]
 
-            ti_le = 75 + (val4 % 14)
-            if (trend_bias > 4 and ket_qua == "🟢 TÀI") or (trend_bias < -4 and ket_qua == "🔴 XỈU"):
-                ti_le += 3
-            ti_le = max(74, min(88, ti_le))
+        tai_10 = 0
+        tai_5 = 0
+        results = []  # lưu kết quả T/X của 10 phiên
 
-            msg = (f"🌟 MAX789 VIP TUANX3000 🌟\n"
-                   f"🎯 Phiên: #{id_moi}\n"
-                   f"🔮 Dự đoán: {ket_qua}\n"
-                   f"📊 Tỉ lệ chuẩn: {ti_le}%\n"
-                   f"♾️ Mã MD5: {ma_md5}\n"
-                   f"──────────────────")
+        for line in recent_10:
+            p = parse_session_line(line)
+            if p:
+                dice_sum = int(p.get('DiceSum', 0))
+                is_tai = dice_sum >= 11 or p.get('resultTruyenThong') == 'TAI'
+                results.append('T' if is_tai else 'X')
+                tai_10 += 1 if is_tai else 0
+                if line in recent_5[:5]:  # 5 phiên gần nhất
+                    tai_5 += 1 if is_tai else 0
 
-            messages.append(msg)
+        xiu_10 = 10 - tai_10
+        xiu_5 = 5 - tai_5
 
-        for m in messages:
-            await context.bot.send_message(chat_id=CHANNEL_ID, text=m)
+        trend_bias = (tai_10 - xiu_10) * 2
+        short_trend = tai_5 - xiu_5
 
-        return f"✅ Đã soi {len(messages)} phiên thành công!"
+        # Phát hiện cầu bệt (3+ liên tiếp)
+        streak_tai = max((i for i in range(1, len(results)+1) if all(r == 'T' for r in results[:i])), default=0)
+        streak_xiu = max((i for i in range(1, len(results)+1) if all(r == 'X' for r in results[:i])), default=0)
+
+        # ====================== TÍNH TOÁN DỰ ĐOÁN NÂNG CAO ======================
+        base = (next_session * 12) + (trend_bias * 4) + (short_trend * 6)
+
+        # Ưu tiên theo cầu bệt mạnh
+        if streak_tai >= 3:
+            base += 25
+        elif streak_xiu >= 3:
+            base -= 25
+
+        diem = (base % 10 + random.randint(-1, 2)) % 10   # random kiểm soát
+
+        ket_qua = "🟢 TÀI" if diem >= 5 else "🔴 XỈU"
+
+        # Tính tỉ lệ động
+        ti_le = 76 + abs(trend_bias) * 1.2 + abs(short_trend) * 2
+
+        # Bonus khi cầu rất mạnh
+        if (trend_bias > 6 and ket_qua == "🟢 TÀI") or (trend_bias < -6 and ket_qua == "🔴 XỈU"):
+            ti_le += 5
+        if (streak_tai >= 3 and ket_qua == "🟢 TÀI") or (streak_xiu >= 3 and ket_qua == "🔴 XỈU"):
+            ti_le += 4
+
+        ti_le = max(72, min(89, int(ti_le)))
+
+        # ====================== SOẠN TIN NHẮN ======================
+        trend_text = "TÀI MẠNH" if tai_10 >= 7 else "XỈU MẠNH" if xiu_10 >= 7 else "Cân bằng"
+
+        msg = (f"🌟 **Max789 VIP TUANX3000** 🌟\n"
+               f"🎯 Phiên: #{next_session}\n"
+               f"🔮 Dự đoán: {ket_qua}\n"
+               f"📊 Tỉ lệ: **{ti_le}%**\n"
+               f"📈 Trend 10: {tai_10}T - {xiu_10}X ({trend_text})\n"
+               f"🔥 Trend 5:  {tai_5}T - {xiu_5}X\n"
+               f"⚡ Cầu: {'Bệt ' + str(streak_tai) + 'T' if streak_tai >= 3 else 'Bệt ' + str(streak_xiu) + 'X' if streak_xiu >= 3 else 'Đang chuyển'}")
+
+        await context.bot.send_message(
+            chat_id=CHANNEL_ID, 
+            text=msg, 
+            parse_mode='Markdown'
+        )
+        
+        last_session_id = current_session
+        logging.info(f"Phiên #{next_session} → {ket_qua} | {ti_le}% | Trend: {tai_10}-{xiu_10}")
 
     except Exception as e:
-        logging.error(f"Lỗi soi cầu: {e}")
-        return "❌ Lỗi kết nối API, thử lại sau."
+        logging.error(f"Lỗi job_monitor: {e}", exc_info=True)
 
-# ====================== XỬ LÝ LỆNH "soicau" (KHÔNG CÓ DẤU /) ======================
-async def soicau_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
-        return  # Không trả lời nếu không phải admin
+# ====================== COMMAND ======================
+async def bat_tool(update, context):
+    if update.effective_user.id not in ADMIN_IDS: return
+    global bot_enabled
+    bot_enabled = True
+    await update.message.reply_text("✅ Bot đã được **BẬT**.")
 
-    text = update.message.text.strip().lower()
-
-    # Kiểm tra tin nhắn bắt đầu bằng "soicau"
-    if not text.startswith("soicau"):
-        return
-
-    # Lấy số lần soi (mặc định là 1)
-    try:
-        parts = text.split()
-        so_lan = int(parts[1]) if len(parts) > 1 else 1
-        so_lan = max(1, min(10, so_lan))
-    except:
-        so_lan = 1
-
-    status = await soi_cau(context, so_lan)
-    await update.message.reply_text(status)
+async def tat_tool(update, context):
+    if update.effective_user.id not in ADMIN_IDS: return
+    global bot_enabled
+    bot_enabled = False
+    await update.message.reply_text("❌ Bot đã được **TẮT**.")
 
 # ====================== KHỞI ĐỘNG ======================
 if __name__ == '__main__':
     threading.Thread(target=run_web, daemon=True).start()
+    
+    app = ApplicationBuilder().token(TOKEN).build()
 
-    application = ApplicationBuilder().token(TOKEN).build()
+    if app.job_queue:
+        app.job_queue.run_repeating(job_monitor, interval=25, first=5)   # chạy nhanh hơn một chút
 
-    # Sử dụng MessageHandler để bắt lệnh không có dấu /
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, soicau_handler))
+    app.add_handler(CommandHandler("batmax", bat_tool))
+    app.add_handler(CommandHandler("tatmax", tat_tool))
 
-    logging.info("🚀 Bot MAX789 VIP TUANX3000 đã khởi động - Lệnh: soicau (không dấu /)")
-    application.run_polling(drop_pending_updates=True, timeout=30)
+    logging.info("🚀 Bot Tài Xỉu MD5 - Phiên bản Tính Toán NÂNG CAO đã khởi động!")
+    app.run_polling()
