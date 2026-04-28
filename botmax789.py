@@ -5,11 +5,11 @@ import logging
 import threading
 from flask import Flask
 
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, JobQueue
 
 # ====================== CẤU HÌNH ======================
 TOKEN = "8639357771:AAE5i6uDVgnAMd3vX5Y8-wYp8SaA-P2H59Y" 
-CHANNEL_ID = '-1003991810381'
+CHANNEL_ID = -1003991810381   # Dùng số âm, không dấu ngoặc kép
 
 ADMIN_IDS = [8566247215]
 
@@ -48,15 +48,18 @@ def parse_session_line(line: str):
                 value = value.strip().strip('"')
                 data[key] = value
         return data
-    except Exception:
+    except Exception as e:
+        logging.error(f"Lỗi parse line: {e}")
         return None
 
-# ====================== JOB MONITOR (ASYNC - ĐÃ SỬA) ======================
+# ====================== JOB MONITOR ======================
 async def job_monitor(context: ContextTypes.DEFAULT_TYPE):
     global last_session_id, bot_enabled
 
     if not bot_enabled:
         return
+
+    chat_id = context.job.chat_id or CHANNEL_ID
 
     try:
         response = requests.get(API_URL, timeout=15)
@@ -64,6 +67,7 @@ async def job_monitor(context: ContextTypes.DEFAULT_TYPE):
         data = response.json()
 
         if not data or len(data) == 0:
+            logging.warning("API trả về dữ liệu rỗng")
             return
 
         latest_line = data[0]
@@ -75,6 +79,7 @@ async def job_monitor(context: ContextTypes.DEFAULT_TYPE):
 
         current_session = int(phien.get('SessionId'))
 
+        # Tránh lặp lại cùng phiên
         if last_session_id is not None and last_session_id == current_session:
             return
 
@@ -92,7 +97,8 @@ async def job_monitor(context: ContextTypes.DEFAULT_TYPE):
             dice_sum = int(p.get('DiceSum', 0))
             is_tai = (p.get('resultTruyenThong') == 'TAI') or (dice_sum >= 11)
             results.append('T' if is_tai else 'X')
-            tai_10 += 1 if is_tai else 0
+            if is_tai:
+                tai_10 += 1
 
         xiu_10 = 10 - tai_10
         trend_bias = (tai_10 - xiu_10) * 2
@@ -125,7 +131,7 @@ async def job_monitor(context: ContextTypes.DEFAULT_TYPE):
 
         ti_le = max(72, min(89, int(ti_le)))
 
-        # ====================== TIN NHẮN (ẨN TREND) ======================
+        # ====================== GỬI TIN NHẮN ======================
         msg = (
             f"🌟 **Max789 VIP TUANX3000** 🌟\n"
             f"🎯 Phiên: #{next_session}\n"
@@ -134,18 +140,18 @@ async def job_monitor(context: ContextTypes.DEFAULT_TYPE):
         )
 
         await context.bot.send_message(
-            chat_id=CHANNEL_ID,
+            chat_id=chat_id,
             text=msg,
             parse_mode='Markdown'
         )
 
         last_session_id = current_session
-        logging.info(f"Phiên #{next_session} → {ket_qua} | {ti_le}%")
+        logging.info(f"Đã gửi dự đoán phiên #{next_session} → {ket_qua} | {ti_le}%")
 
     except requests.exceptions.RequestException as e:
         logging.error(f"Lỗi kết nối API: {e}")
     except Exception as e:
-        logging.error(f"Lỗi job_monitor: {e}", exc_info=True)
+        logging.error(f"Lỗi trong job_monitor: {e}", exc_info=True)
 
 
 # ====================== COMMAND ======================
@@ -165,18 +171,40 @@ async def tat_tool(update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Bot đã được **TẮT**.")
 
 
+async def test_send(update, context: ContextTypes.DEFAULT_TYPE):
+    """Test xem bot có gửi tin được vào channel không"""
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    try:
+        await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text="✅ **Test thành công!** Bot đang hoạt động bình thường.",
+            parse_mode='Markdown'
+        )
+        await update.message.reply_text("Đã gửi tin test vào channel.")
+    except Exception as e:
+        await update.message.reply_text(f"Lỗi khi gửi test: {e}")
+
+
 # ====================== KHỞI ĐỘNG ======================
 if __name__ == '__main__':
     threading.Thread(target=run_web, daemon=True).start()
 
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # Job chạy với async callback
-    app.job_queue.run_repeating(job_monitor, interval=25, first=5)
+    # Job chạy đúng cách (quan trọng nhất)
+    app.job_queue.run_repeating(
+        job_monitor,
+        interval=25,
+        first=5,
+        chat_id=CHANNEL_ID,
+        name="md5_soicau_job"
+    )
 
     app.add_handler(CommandHandler("batmax", bat_tool))
     app.add_handler(CommandHandler("tatmax", tat_tool))
+    app.add_handler(CommandHandler("test", test_send))   # Dùng /test để kiểm tra
 
-    logging.info("🚀 Bot Tài Xỉu MD5 - Phiên bản ẨN TREND (Async Fixed) đã khởi động!")
+    logging.info("🚀 Bot Tài Xỉu MD5 - Phiên bản max789 đã khởi động!")
     
     app.run_polling(drop_pending_updates=True)
