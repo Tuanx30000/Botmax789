@@ -5,11 +5,11 @@ import logging
 import threading
 from flask import Flask
 
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, JobQueue
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # ====================== CẤU HÌNH ======================
 TOKEN = "8639357771:AAE5i6uDVgnAMd3vX5Y8-wYp8SaA-P2H59Y" 
-CHANNEL_ID = -1003991810381   # Dùng số âm, không dấu ngoặc kép
+CHANNEL_ID = -1003991810381
 
 ADMIN_IDS = [8566247215]
 
@@ -20,12 +20,16 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
-# ====================== WEB SERVER ======================
+# ====================== WEB SERVER (Keep-alive cho Render) ======================
 app_flask = Flask(__name__)
 
 @app_flask.route('/')
 def home():
     return "Bot is running!"
+
+@app_flask.route('/ping')
+def ping():
+    return "pong", 200
 
 def run_web():
     port = int(os.environ.get('PORT', 10000))
@@ -35,28 +39,38 @@ def run_web():
 bot_enabled = True
 last_session_id = None
 
-# ====================== PARSE DỮ LIỆU ======================
-def parse_session_line(line: str):
+# ====================== PARSE DỮ LIỆU (ĐÃ FIX) ======================
+def parse_session(item):
+    """Hỗ trợ cả dict và string từ API"""
     try:
-        line = line.strip().strip('[]')
-        items = line.split(',')
-        data = {}
-        for item in items:
-            if ':' in item:
-                key, value = item.split(':', 1)
-                key = key.strip()
-                value = value.strip().strip('"')
-                data[key] = value
-        return data
+        if isinstance(item, dict):
+            return item
+        
+        if isinstance(item, str):
+            line = item.strip().strip('[]')
+            data = {}
+            for part in line.split(','):
+                if ':' in part:
+                    key, value = part.split(':', 1)
+                    key = key.strip()
+                    value = value.strip().strip('"')
+                    data[key] = value
+            return data
+        
+        logging.warning(f"Không hỗ trợ type: {type(item)}")
+        return None
     except Exception as e:
-        logging.error(f"Lỗi parse line: {e}")
+        logging.error(f"Lỗi parse: {e} | Data: {str(item)[:100]}")
         return None
 
-# ====================== JOB MONITOR ======================
+# ====================== JOB MONITOR (ĐÃ FIX) ======================
 async def job_monitor(context: ContextTypes.DEFAULT_TYPE):
     global last_session_id, bot_enabled
 
+    logging.info(f"[JOB] Job_monitor đang chạy | Enabled = {bot_enabled}")
+
     if not bot_enabled:
+        logging.info("[JOB] Bot đang tắt → bỏ qua")
         return
 
     chat_id = context.job.chat_id or CHANNEL_ID
@@ -67,43 +81,48 @@ async def job_monitor(context: ContextTypes.DEFAULT_TYPE):
         data = response.json()
 
         if not data or len(data) == 0:
-            logging.warning("API trả về dữ liệu rỗng")
+            logging.warning("[JOB] API trả về dữ liệu rỗng")
             return
 
-        latest_line = data[0]
-        phien = parse_session_line(latest_line)
+        # Parse phiên mới nhất
+        latest_item = data[0]
+        phien = parse_session(latest_item)
 
         if not phien or 'SessionId' not in phien:
-            logging.warning("Không parse được SessionId")
+            logging.warning(f"[JOB] Không parse được SessionId. Sample: {str(latest_item)[:150]}")
             return
 
         current_session = int(phien.get('SessionId'))
 
-        # Tránh lặp lại cùng phiên
         if last_session_id is not None and last_session_id == current_session:
+            logging.info(f"[JOB] Phiên {current_session} đã xử lý, bỏ qua")
             return
 
         next_session = current_session + 1
+        logging.info(f"[JOB] Đang xử lý phiên mới: #{next_session}")
 
         # ====================== TÍNH TOÁN ======================
         recent_10 = data[:10]
         tai_10 = 0
         results = []
 
-        for line in recent_10:
-            p = parse_session_line(line)
+        for item in recent_10:
+            p = parse_session(item)
             if not p:
                 continue
-            dice_sum = int(p.get('DiceSum', 0))
-            is_tai = (p.get('resultTruyenThong') == 'TAI') or (dice_sum >= 11)
-            results.append('T' if is_tai else 'X')
-            if is_tai:
-                tai_10 += 1
+            try:
+                dice_sum = int(p.get('DiceSum', 0))
+                is_tai = (p.get('resultTruyenThong') == 'TAI') or (dice_sum >= 11)
+                results.append('T' if is_tai else 'X')
+                if is_tai:
+                    tai_10 += 1
+            except:
+                continue
 
         xiu_10 = 10 - tai_10
         trend_bias = (tai_10 - xiu_10) * 2
 
-        # Tính streak
+        # Streak
         streak_tai = streak_xiu = 0
         for r in results:
             if r == 'T':
@@ -124,9 +143,9 @@ async def job_monitor(context: ContextTypes.DEFAULT_TYPE):
         ket_qua = "🟢 TÀI" if diem >= 5 else "🔴 XỈU"
 
         ti_le = 76 + abs(trend_bias) * 1.2
-        if (trend_bias > 6 and ket_qua == "🟢 TÀI") or (trend_bias < -6 and ket_qua == "🔴 XỈU"):
+        if (trend_bias > 6 and "TÀI" in ket_qua) or (trend_bias < -6 and "XỈU" in ket_qua):
             ti_le += 5
-        if (streak_tai >= 3 and ket_qua == "🟢 TÀI") or (streak_xiu >= 3 and ket_qua == "🔴 XỈU"):
+        if (streak_tai >= 3 and "TÀI" in ket_qua) or (streak_xiu >= 3 and "XỈU" in ket_qua):
             ti_le += 4
 
         ti_le = max(72, min(89, int(ti_le)))
@@ -146,12 +165,12 @@ async def job_monitor(context: ContextTypes.DEFAULT_TYPE):
         )
 
         last_session_id = current_session
-        logging.info(f"Đã gửi dự đoán phiên #{next_session} → {ket_qua} | {ti_le}%")
+        logging.info(f"✅ ĐÃ GỬI: Phiên #{next_session} → {ket_qua} | {ti_le}%")
 
     except requests.exceptions.RequestException as e:
-        logging.error(f"Lỗi kết nối API: {e}")
+        logging.error(f"[JOB] Lỗi kết nối API: {e}")
     except Exception as e:
-        logging.error(f"Lỗi trong job_monitor: {e}", exc_info=True)
+        logging.error(f"[JOB] Lỗi không xác định: {e}", exc_info=True)
 
 
 # ====================== COMMAND ======================
@@ -172,39 +191,41 @@ async def tat_tool(update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def test_send(update, context: ContextTypes.DEFAULT_TYPE):
-    """Test xem bot có gửi tin được vào channel không"""
     if update.effective_user.id not in ADMIN_IDS:
         return
     try:
         await context.bot.send_message(
             chat_id=CHANNEL_ID,
-            text="✅ **Test thành công!** Bot đang hoạt động bình thường.",
+            text="✅ **Test thành công!** Bot đang hoạt động.",
             parse_mode='Markdown'
         )
         await update.message.reply_text("Đã gửi tin test vào channel.")
     except Exception as e:
-        await update.message.reply_text(f"Lỗi khi gửi test: {e}")
+        await update.message.reply_text(f"❌ Lỗi gửi test: {e}")
 
 
 # ====================== KHỞI ĐỘNG ======================
 if __name__ == '__main__':
+    # Chạy Flask để giữ Render không sleep
     threading.Thread(target=run_web, daemon=True).start()
 
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # Job chạy đúng cách (quan trọng nhất)
+    # Job Queue
     app.job_queue.run_repeating(
         job_monitor,
         interval=25,
-        first=5,
+        first=10,           # Chạy lần đầu sau 10 giây
         chat_id=CHANNEL_ID,
         name="md5_soicau_job"
     )
 
+    # Commands
     app.add_handler(CommandHandler("batmax", bat_tool))
     app.add_handler(CommandHandler("tatmax", tat_tool))
-    app.add_handler(CommandHandler("test", test_send))   # Dùng /test để kiểm tra
+    app.add_handler(CommandHandler("test", test_send))
 
-    logging.info("🚀 Bot Tài Xỉu MD5 - Phiên bản max789 đã khởi động!")
-    
+    logging.info("🚀 Bot Tài Xỉu MD5 - Phiên bản max789 đã khởi động trên Render!")
+    logging.info("Job đã được lên lịch chạy mỗi 25 giây.")
+
     app.run_polling(drop_pending_updates=True)
